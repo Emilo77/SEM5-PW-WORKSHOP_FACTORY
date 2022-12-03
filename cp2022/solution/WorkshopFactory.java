@@ -9,6 +9,7 @@ package cp2022.solution;
 
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
@@ -24,33 +25,33 @@ public final class WorkshopFactory {
 
     public static class WorkersOccupyMap {
         Collection<WorkplaceWrapper> workplaceWrappers;
-        HashMap<Long, WorkplaceWrapper> occupyMap;
+        ConcurrentHashMap<Long, WorkplaceWrapper> occupyMap;
+
+        Semaphore mutex;
 
         protected WorkersOccupyMap(Collection<WorkplaceWrapper> workplaceWrappers) {
-            this.occupyMap = new HashMap<>();
+            this.occupyMap = new ConcurrentHashMap<>();
             this.workplaceWrappers = workplaceWrappers;
+            this.mutex = new Semaphore(1, true);
         }
 
         protected void put(WorkplaceId wid) {
-            long pid = Thread.currentThread().getId();
-            WorkplaceWrapper wp = Utils.getWorkplace(workplaceWrappers, wid);
-            occupyMap.put(pid, wp); //sprawdzenie, czy elementu nie ma już w mapie
+            occupyMap.put(Thread.currentThread().getId(),
+                    Utils.getWorkplace(workplaceWrappers, wid)); //sprawdzenie, czy elementu nie ma już w mapie
         }
 
         protected void free() {
-            long pid = Thread.currentThread().getId();
-            if (occupyMap.get(pid) == null) {
-                throw new RuntimeException("panic: couldn't find workplace occupied by this pid!");
+            if (occupyMap.get(Thread.currentThread().getId()) == null) {
+                throw new RuntimeException("panic: couldn't find workplace occupied by this pid! free");
             }
-            occupyMap.remove(pid);
+            occupyMap.remove(Thread.currentThread().getId());
         }
 
         protected WorkplaceWrapper get() {
-            long pid = Thread.currentThread().getId();
-            if (occupyMap.get(pid) == null) {
-                throw new RuntimeException("panic: couldn't find workplace occupied by this pid!");
+            if (occupyMap.get(Thread.currentThread().getId()) == null) {
+                throw new RuntimeException("panic: couldn't find workplace occupied by this pid! get");
             }
-            return occupyMap.get(pid);
+            return occupyMap.get(Thread.currentThread().getId());
         }
 
     }
@@ -59,7 +60,7 @@ public final class WorkshopFactory {
         return workplaces.stream().map(WorkplaceWrapper::new).collect(Collectors.toList());
     }
 
-    public static class WorkplaceWrapper extends Workplace {
+    static class WorkplaceWrapper extends Workplace {
         private final Workplace wp;
         private final Semaphore enterMutex;
         private final Semaphore workingMutex;
@@ -78,8 +79,6 @@ public final class WorkshopFactory {
                 wp.use();
             } catch (InterruptedException e) {
                 throw new RuntimeException(runtimeMessage);
-            } finally {
-                enterMutex.release();
             }
         }
     }
@@ -96,7 +95,7 @@ public final class WorkshopFactory {
                     workplace.enterMutex.acquire();
                     occupyMap.put(wid);
 
-                    return workplace.wp;
+                    return workplace;
                 } catch (InterruptedException e) {
                     throw new RuntimeException(runtimeMessage);
                 }
@@ -108,12 +107,22 @@ public final class WorkshopFactory {
                     WorkplaceWrapper pastWorkplace = occupyMap.get();
                     WorkplaceWrapper futureWorkplace = getWorkplace(workplaceWrappers, wid);
 
+                    if (pastWorkplace.getId() == futureWorkplace.getId()) {
+                        pastWorkplace.workingMutex.release();
+                        return futureWorkplace;
+                    }
+
+                    // w tym miejscu trzeba jakoś wykrywać cykle i nie wpuszczać
+                    // innych pracowników na stanowiska będące w cyklu
+                    pastWorkplace.enterMutex.release();
                     futureWorkplace.enterMutex.acquire();
+
                     occupyMap.free();
                     occupyMap.put(wid);
+
                     pastWorkplace.workingMutex.release();
 
-                    return futureWorkplace.wp;
+                    return futureWorkplace;
 
                 } catch (InterruptedException e) {
                     throw new RuntimeException(runtimeMessage);
@@ -124,6 +133,7 @@ public final class WorkshopFactory {
             public void leave() {
                 WorkplaceWrapper workplace = occupyMap.get();
                 occupyMap.free();
+                workplace.enterMutex.release();
                 workplace.workingMutex.release();
             }
         };
