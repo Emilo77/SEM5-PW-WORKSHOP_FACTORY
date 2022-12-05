@@ -7,11 +7,14 @@
  */
 package cp2022.solution;
 
-import cp2022.base.Workplace;
-import cp2022.base.WorkplaceId;
-import cp2022.base.Workshop;
+import java.util.Collection;
 
-import java.util.*;
+import cp2022.base.Workplace;
+import cp2022.base.Workshop;
+import cp2022.base.WorkplaceId;
+
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.*;
 
 import static cp2022.solution.Utils.Action;
@@ -24,10 +27,11 @@ public final class WorkshopFactory {
     static class WorkplaceWrapper extends Workplace {
         private final Workplace workplace;
         private final Semaphore enterMutex;
-        private final Semaphore setBlocker;
         private final Semaphore workingMutex;
         private final WorkersOccupyMap workerMap;
         private final Set<Long> workers;
+        private final Semaphore setBlocker;
+
 
         protected WorkplaceWrapper(Workplace workplace, WorkersOccupyMap workerMap) {
             super(workplace.getId());
@@ -89,17 +93,18 @@ public final class WorkshopFactory {
 
     public final static Workshop newWorkshop(Collection<Workplace> workplaces) {
 
-
         return new Workshop() {
             private final WorkersOccupyMap workerMap = new WorkersOccupyMap();
             private final Collection<WorkplaceWrapper> workplaceWrappers =
                     Utils.initializeWrappers(workplaces, workerMap);
-            private final WaitingQue waitingQue =
-                    new WaitingQue(workplaceWrappers.size());
+            private final WorkersWaitingQueue waitingQueue =
+                    new WorkersWaitingQueue(workplaces.size());
 
             @Override
             public Workplace enter(WorkplaceId wid) {
                 try {
+
+                    waitingQueue.add(Thread.currentThread().getId());
 
                     workerMap.insertNewWorker(Thread.currentThread().getId());
                     /* Wyszukanie stanowiska o podanym identyfikatorze */
@@ -111,10 +116,15 @@ public final class WorkshopFactory {
                             Action.ENTER,
                             workplace);
 
-//                    waitingQue.passQue(Thread.currentThread().getId());
 
-                    /* Zawieszenie się na wejściu na stanowisko */
+
+                    /* Zawieszenie się na wejściu na stanowisko. */
                     workplace.enterMutex.acquire();
+
+                    /* Przejście przez kolejkę innych czekających wątków. */
+                    waitingQueue.pass(Thread.currentThread().getId());
+                    waitingQueue.remove(Thread.currentThread().getId());
+
 
                     return workplace;
                 } catch (InterruptedException e) {
@@ -131,6 +141,9 @@ public final class WorkshopFactory {
             public Workplace switchTo(WorkplaceId wid) {
                 try {
 
+                    /* Zaznaczenie, że czeka się w kolejce do chęci użycia. */
+                    waitingQueue.add(Thread.currentThread().getId());
+
                     /* Wyszukanie aktualnego stanowiska */
                     WorkplaceWrapper currentWorkplace =
                             workerMap.getCurrentWorkplace(Thread.currentThread().getId());
@@ -146,6 +159,11 @@ public final class WorkshopFactory {
                                 Thread.currentThread().getId(),
                                 Action.USE,
                                 futureWorkplace);
+                        /* Usunięcie się z kolejki, ponieważ mamy priorytet */
+                        waitingQueue.remove(Thread.currentThread().getId());
+
+                        /* Zwolnienie ochrony do użycia USE, możemy tak zrobić,
+                        * ponieważ wiemy, że będziemy sami na stanowisku. */
                         currentWorkplace.workingMutex.release();
                         return futureWorkplace;
                     }
@@ -157,10 +175,13 @@ public final class WorkshopFactory {
                             currentWorkplace,
                             futureWorkplace);
 
-                    checkCycle(futureWorkplace);
 
+
+                    checkCycle(futureWorkplace);
                     currentWorkplace.enterMutex.release();
+
                     futureWorkplace.enterMutex.acquire();
+                    waitingQueue.remove(Thread.currentThread().getId());
 
                     currentWorkplace.workingMutex.release();
 

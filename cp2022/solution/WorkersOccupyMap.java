@@ -84,8 +84,6 @@ public class WorkersOccupyMap {
             throw new RuntimeException("Map panic: getDesiredWorkplace: couldn't find workplace occupied by this pid! get");
         }
 
-        Assertions.assertNotEquals(Utils.Action.SWITCHTO, action);
-
         info.update(action, workplace);
 
         mapBlocker.release();
@@ -102,8 +100,6 @@ public class WorkersOccupyMap {
         if (info == null) {
             throw new RuntimeException("Map panic: getDesiredWorkplace: couldn't find workplace occupied by this pid! get");
         }
-
-        Assertions.assertEquals(Utils.Action.SWITCHTO, action);
 
         info.update(action, currentWorkplace, desiredWorkplace);
 
