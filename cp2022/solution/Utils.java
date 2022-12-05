@@ -10,38 +10,10 @@ import java.util.concurrent.Semaphore;
 
 public class Utils {
 
-//    public static Collection<WorkshopFactory.WorkplaceWrapper> initializeWrappers(Collection<Workplace> workplaces) {
-//        return workplaces.stream().map(workplace -> {
-////            return WorkshopFactory.WorkplaceWrapper(workplace);
-//            return WorkshopFactory.WorkplaceWrapper;
-//        }).collect(Collectors.toCollection())
-//        //todo stworzyć kolekcję wrapperów na podstawie kolekcji Workplaces
-//    }
-
-    public static HashMap<WorkplaceId, Semaphore> initializeMap(Collection<Workplace> workplaces) {
-        HashMap<WorkplaceId, Semaphore> map = new HashMap<>();
-        for (Workplace w : workplaces) {
-            map.put(w.getId(), new Semaphore(1, true));
-        }
-        return map;
-    }
-
-    public static void occupyMap(HashMap<Long, WorkplaceId> map, Long pid, WorkplaceId wid) {
-        map.put(pid, wid);
-    }
-
-    public static void freeMap(HashMap<Long, WorkplaceId> map, Long pid) {
-        if (map.get(pid) == null) {
-            throw new RuntimeException("panic: couldn't find workplace occupied by this pid!");
-        }
-        map.remove(pid);
-    }
-
-    public static WorkplaceId getOccupiedId(HashMap<Long, WorkplaceId> map, Long pid) {
-        if (map.get(pid) == null) {
-            throw new RuntimeException("panic: couldn't find workplace occupied by this pid!");
-        }
-        return map.get(pid);
+    public enum Action {
+        ENTER,
+        SWITCHTO,
+        USE,
     }
 
     public static WorkshopFactory.WorkplaceWrapper getWorkplace

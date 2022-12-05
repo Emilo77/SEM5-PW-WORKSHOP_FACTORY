@@ -7,93 +7,298 @@
  */
 package cp2022.solution;
 
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Semaphore;
-import java.util.stream.Collectors;
-
 import cp2022.base.Workplace;
 import cp2022.base.WorkplaceId;
 import cp2022.base.Workshop;
+import cp2022.tests.fibonacci.Worker;
+import org.junit.jupiter.api.Assertions;
 
-import static cp2022.solution.Utils.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
+
+import static cp2022.solution.Utils.Action;
+import static cp2022.solution.Utils.getWorkplace;
 
 
 public final class WorkshopFactory {
     static String runtimeMessage = "panic: unexpected thread interruption";
 
-    public static class WorkersOccupyMap {
-        Collection<WorkplaceWrapper> workplaceWrappers;
-        ConcurrentHashMap<Long, WorkplaceWrapper> occupyMap;
+    public static class WorkerInfo {
 
-        Semaphore mutex;
+        private final String name; //do usunięcia później
+        private final Long pid;
+        private Action desiredAction;
+        private WorkplaceWrapper currentWorkplace;
+        private WorkplaceWrapper desiredWorkplace;
+        private Semaphore mutex;
 
-        protected WorkersOccupyMap(Collection<WorkplaceWrapper> workplaceWrappers) {
-            this.occupyMap = new ConcurrentHashMap<>();
-            this.workplaceWrappers = workplaceWrappers;
+        public WorkerInfo() {
+            this.name = Thread.currentThread().getName();
+            this.pid = Thread.currentThread().getId();
+            this.desiredAction = Action.ENTER;
+            this.currentWorkplace = null;
+            this.desiredWorkplace = null;
             this.mutex = new Semaphore(1, true);
         }
 
-        protected void put(WorkplaceId wid) {
-            occupyMap.put(Thread.currentThread().getId(),
-                    Utils.getWorkplace(workplaceWrappers, wid)); //sprawdzenie, czy elementu nie ma już w mapie
+        public void update(Action newAction,
+                           WorkplaceWrapper workplace) {
+
+            this.desiredAction = newAction;
+
+            if (newAction.equals(Action.ENTER)) {
+                this.currentWorkplace = null;
+                this.desiredWorkplace = workplace;
+            } else if (newAction.equals(Action.USE)) {
+                this.currentWorkplace = workplace;
+                this.desiredWorkplace = null;
+            }
         }
 
-        protected void free() {
-            if (occupyMap.get(Thread.currentThread().getId()) == null) {
+        public void update(Action newAction,
+                           WorkplaceWrapper newCurrentWorkplace,
+                           WorkplaceWrapper newDesiredWorkplace) {
+
+            desiredAction = newAction;
+            currentWorkplace = newCurrentWorkplace;
+            desiredWorkplace = newDesiredWorkplace;
+        }
+    }
+
+    public static class WorkersOccupyMap {
+        ConcurrentHashMap<Long, WorkerInfo> occupyMap;
+
+        Semaphore mutex;
+
+        protected WorkersOccupyMap() {
+            this.occupyMap = new ConcurrentHashMap<>();
+            this.mutex = new Semaphore(1, true);
+        }
+
+        protected void insertNewWorker(Long pid) throws InterruptedException {
+            mutex.acquire();
+
+            WorkerInfo info = new WorkerInfo();
+            occupyMap.put(pid, info); //sprawdzenie, czy elementu nie ma już w mapie
+
+            mutex.release();
+        }
+
+        protected void removeWorker(Long pid) throws InterruptedException {
+            mutex.acquire();
+
+            WorkerInfo info = occupyMap.get(pid);
+
+            if (info == null) {
                 throw new RuntimeException("panic: couldn't find workplace occupied by this pid! free");
             }
-            occupyMap.remove(Thread.currentThread().getId());
+            occupyMap.remove(pid);
+
+            mutex.release();
         }
 
-        protected WorkplaceWrapper get() {
-            if (occupyMap.get(Thread.currentThread().getId()) == null) {
-                throw new RuntimeException("panic: couldn't find workplace occupied by this pid! get");
+        protected WorkplaceWrapper getCurrentWorkplace(Long pid) throws InterruptedException {
+            mutex.acquire();
+
+            WorkerInfo info = occupyMap.get(pid);
+            if (info == null) {
+                throw new RuntimeException("Map panic: getCurrentWorkplace: couldn't find workplace occupied by this pid!");
             }
-            return occupyMap.get(Thread.currentThread().getId());
+
+            mutex.release();
+            return info.currentWorkplace;
+        }
+
+        protected WorkplaceWrapper getDesiredWorkplace(Long pid) throws InterruptedException {
+            mutex.acquire();
+
+            WorkerInfo info = occupyMap.get(pid);
+            if (info == null) {
+                throw new RuntimeException("Map panic: getDesiredWorkplace: couldn't find workplace occupied by this pid! get");
+            }
+
+            mutex.release();
+            return info.desiredWorkplace;
+        }
+
+        protected void updateWorkerInfo(Long pid,
+                                        Action action,
+                                        WorkplaceWrapper workplace)
+                throws InterruptedException {
+            mutex.acquire();
+
+            WorkerInfo info = occupyMap.get(pid);
+            if (info == null) {
+                throw new RuntimeException("Map panic: getDesiredWorkplace: couldn't find workplace occupied by this pid! get");
+            }
+
+            Assertions.assertNotEquals(Action.SWITCHTO, action);
+
+            info.update(action, workplace);
+
+            mutex.release();
+        }
+
+        protected void updateWorkerInfo(Long pid,
+                                        Action action,
+                                        WorkplaceWrapper currentWorkplace,
+                                        WorkplaceWrapper desiredWorkplace)
+                throws InterruptedException {
+            mutex.acquire();
+
+            WorkerInfo info = occupyMap.get(pid);
+            if (info == null) {
+                throw new RuntimeException("Map panic: getDesiredWorkplace: couldn't find workplace occupied by this pid! get");
+            }
+
+            Assertions.assertEquals(Action.SWITCHTO, action);
+
+            info.update(action, currentWorkplace, desiredWorkplace);
+
+            mutex.release();
         }
 
     }
 
-    public static Collection<WorkplaceWrapper> initializeWrappers(Collection<Workplace> workplaces) {
-        return workplaces.stream().map(WorkplaceWrapper::new).collect(Collectors.toList());
+    public static Collection<WorkplaceWrapper> initializeWrappers(
+            Collection<Workplace> workplaces,
+            WorkersOccupyMap workerMap) {
+        return workplaces.stream().map(workplace -> new WorkplaceWrapper(workplace, workerMap)
+        ).collect(Collectors.toList());
     }
 
     static class WorkplaceWrapper extends Workplace {
-        private final Workplace wp;
+        private final Workplace workplace;
         private final Semaphore enterMutex;
         private final Semaphore workingMutex;
+        private final WorkersOccupyMap workerMap;
+        private final Set<Long> workers;
 
-        protected WorkplaceWrapper(Workplace wp) {
-            super(wp.getId());
-            this.wp = wp;
+        protected WorkplaceWrapper(Workplace workplace, WorkersOccupyMap workerMap) {
+            super(workplace.getId());
+            this.workplace = workplace;
             this.enterMutex = new Semaphore(1, true);
             this.workingMutex = new Semaphore(1, true);
+            this.workerMap = workerMap;
+            this.workers = new HashSet<>();
+        }
+
+        private void addWorker(Long pid) {
+            workers.add(pid);
+        }
+
+        private void removeWorker(Long pid) {
+            workers.remove(pid);
         }
 
         @Override
         public void use() {
             try {
+                this.workers.add(Thread.currentThread().getId());
+                /* Informacja o wątku, że chce zacząć pracę na stanowisku */
+                workerMap.updateWorkerInfo(
+                        Thread.currentThread().getId(),
+                        Action.USE,
+                        this);
+
                 workingMutex.acquire();
-                wp.use();
+                workplace.use();
             } catch (InterruptedException e) {
                 throw new RuntimeException(runtimeMessage);
             }
         }
     }
 
+//    private static class WorkerSemaphore {
+//        private final Long pid;
+//        private final Semaphore semaphore;
+//
+//        protected WorkerSemaphore(Long pid, Integer permits) {
+//            this.pid = pid;
+//            this.semaphore = new Semaphore(permits, true);
+//        }
+//    }
+//
+//    private static class WaitingQue {
+//        private final Deque<WorkerSemaphore> que;
+//        private final Integer permits;
+//        private final Semaphore mutex;
+//
+//        protected WaitingQue(Integer permits) {
+//            this.que = new ArrayDeque<>();
+//            this.permits = permits;
+//            this.mutex = new Semaphore(1, true);
+//        }
+//
+//        protected void add(Long pid) throws InterruptedException {
+//            mutex.acquire();
+//            WorkerSemaphore workerSemaphore = new WorkerSemaphore(pid, permits);
+//            que.add(workerSemaphore);
+//            mutex.release();
+//        }
+//
+//        protected void remove() throws InterruptedException {
+//            mutex.acquire();
+//            WorkerSemaphore firstSemaphore = que.peek();
+//            Assertions.assertNotEquals(null, firstSemaphore);
+//            firstSemaphore.semaphore.release(permits + 1);
+//            que.remove();
+//            mutex.release();
+//        }
+//
+//        protected void passQue(Long pid) throws InterruptedException {
+//            mutex.acquire();
+//
+//            WorkerSemaphore semaphore;
+//            Iterator<WorkerSemaphore> iterator = que.descendingIterator();
+//
+//            for (Iterator<WorkerSemaphore> it = que.descendingIterator(); it.hasNext(); ) {
+//                semaphore = it.next();
+//                if (Objects.equals(pid, semaphore.pid)) {
+//                    iterator = it;
+//                    break;
+//                }
+//            }
+//            while (iterator.hasNext()) {
+//                semaphore = iterator.next();
+//                //tutaj jakoś oznaczyć pid jako zatrzymany, aby dało się go obudzić
+//                semaphore.semaphore.acquire();
+//            }
+//            mutex.release();
+//        }
+//
+//
+//    }
+
     public final static Workshop newWorkshop(Collection<Workplace> workplaces) {
 
-        Collection<WorkplaceWrapper> workplaceWrappers = initializeWrappers(workplaces);
-        WorkersOccupyMap occupyMap = new WorkersOccupyMap(workplaceWrappers);
+
         return new Workshop() {
+            private final WorkersOccupyMap workerMap = new WorkersOccupyMap();
+            private final Collection<WorkplaceWrapper> workplaceWrappers =
+                    initializeWrappers(workplaces, workerMap);
+            private final WaitingQue waitingQue =
+                    new WaitingQue(workplaceWrappers.size());
+
             @Override
             public Workplace enter(WorkplaceId wid) {
                 try {
+
+                    workerMap.insertNewWorker(Thread.currentThread().getId());
+                    /* Wyszukanie stanowiska o podanym identyfikatorze */
                     WorkplaceWrapper workplace = getWorkplace(workplaceWrappers, wid);
+
+                    /* Nowa informacja o wątku, że chce wejść na stanowisko */
+                    workerMap.updateWorkerInfo(
+                            Thread.currentThread().getId(),
+                            Action.ENTER,
+                            workplace);
+
+//                    waitingQue.passQue(Thread.currentThread().getId());
+
+                    /* Zawieszenie się na wejściu na stanowisko */
                     workplace.enterMutex.acquire();
-                    occupyMap.put(wid);
 
                     return workplace;
                 } catch (InterruptedException e) {
@@ -101,26 +306,57 @@ public final class WorkshopFactory {
                 }
             }
 
-            @Override //todo sytuacja, kiedy robimy switchTo na to samo stanowisko
+            private void checkCycle(WorkplaceWrapper workplace) {
+
+            }
+
+            @Override
+            //todo sytuacja, kiedy robimy switchTo na to samo stanowisko
             public Workplace switchTo(WorkplaceId wid) {
                 try {
-                    WorkplaceWrapper pastWorkplace = occupyMap.get();
+
+                    /* Wyszukanie aktualnego stanowiska */
+                    WorkplaceWrapper currentWorkplace =
+                            workerMap.getCurrentWorkplace(Thread.currentThread().getId());
+
+                    /* Wyszukanie następnego stanowiska */
                     WorkplaceWrapper futureWorkplace = getWorkplace(workplaceWrappers, wid);
 
-                    if (pastWorkplace.getId() == futureWorkplace.getId()) {
-                        pastWorkplace.workingMutex.release();
+                    /* Jeżeli worker chce zmienić stanowisko na takie samo,
+                     * posiada priorytet i od razu może ponownie wykonać USE. */
+                    if (currentWorkplace.getId() == futureWorkplace.getId()) {
+                        /* Nowa informacja, że wątek chce wykonać USE. */
+                        workerMap.updateWorkerInfo(
+                                Thread.currentThread().getId(),
+                                Action.USE,
+                                futureWorkplace);
+                        currentWorkplace.workingMutex.release();
                         return futureWorkplace;
                     }
 
-                    // w tym miejscu trzeba jakoś wykrywać cykle i nie wpuszczać
-                    // innych pracowników na stanowiska będące w cyklu
-                    pastWorkplace.enterMutex.release();
+                    /* Nowa informacja o wątku, że chce zmienić stanowisko. */
+                    workerMap.updateWorkerInfo(
+                            Thread.currentThread().getId(),
+                            Action.SWITCHTO,
+                            currentWorkplace,
+                            futureWorkplace);
+
+                    checkCycle(futureWorkplace);
+
+                    currentWorkplace.enterMutex.release();
                     futureWorkplace.enterMutex.acquire();
 
-                    occupyMap.free();
-                    occupyMap.put(wid);
+                    currentWorkplace.removeWorker(Thread.currentThread().getId());
+                    futureWorkplace.addWorker(Thread.currentThread().getId());
 
-                    pastWorkplace.workingMutex.release();
+                    /* Nowa informacja o wątku, że zmienił stanowisko
+                     * i chce teraz użyć metody USE. */
+                    workerMap.updateWorkerInfo(
+                            Thread.currentThread().getId(),
+                            Action.USE,
+                            futureWorkplace
+                    );
+                    currentWorkplace.workingMutex.release();
 
                     return futureWorkplace;
 
@@ -131,10 +367,17 @@ public final class WorkshopFactory {
 
             @Override
             public void leave() {
-                WorkplaceWrapper workplace = occupyMap.get();
-                occupyMap.free();
-                workplace.enterMutex.release();
-                workplace.workingMutex.release();
+                try {
+                    WorkplaceWrapper workplace = workerMap.getCurrentWorkplace(
+                            Thread.currentThread().getId());
+                    workplace.workers.remove(Thread.currentThread().getId());
+                    workerMap.removeWorker(Thread.currentThread().getId());
+                    workplace.enterMutex.release();
+                    workplace.workingMutex.release();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(runtimeMessage);
+                }
+
             }
         };
     }
