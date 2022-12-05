@@ -4,8 +4,7 @@ import cp2022.base.Workplace;
 import cp2022.base.WorkplaceId;
 
 import java.util.Collection;
-import java.util.HashMap;
-import java.util.concurrent.Semaphore;
+import java.util.stream.Collectors;
 
 
 public class Utils {
@@ -24,5 +23,12 @@ public class Utils {
             }
         }
         throw new RuntimeException("panic: couldn't find workplace with given id!");
+    }
+
+    public static Collection<WorkshopFactory.WorkplaceWrapper> initializeWrappers(
+            Collection<Workplace> workplaces,
+            WorkersOccupyMap workerMap) {
+        return workplaces.stream().map(workplace -> new WorkshopFactory.WorkplaceWrapper(workplace, workerMap)
+        ).collect(Collectors.toList());
     }
 }
