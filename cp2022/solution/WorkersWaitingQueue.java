@@ -4,20 +4,21 @@ package cp2022.solution;
 import java.util.*;
 import java.util.concurrent.Semaphore;
 
+/* Klasa kolejki, użyta do wyeliminowania zagłodzenia wątków. */
 public class WorkersWaitingQueue {
-
-    private final Semaphore queBlocker;
     private final Integer permits;
     private final FreezeMap freezeMap;
     private final ArrayList<WorkerPatience> patienceArray;
+    private final Semaphore queBlocker;
 
     protected WorkersWaitingQueue(Integer permits) {
-        this.queBlocker = new Semaphore(1, true);
         this.permits = permits;
         this.freezeMap = new FreezeMap();
         this.patienceArray = new ArrayList<>();
+        this.queBlocker = new Semaphore(1, true);
     }
 
+    /* Zwrócenie indeksu w tablicy. */
     private Integer getIndexOfPatience(Long pid) {
         for (int i = 0; i < patienceArray.size(); i++) {
             if (patienceArray.get(i).pid.equals(pid)) {
@@ -27,6 +28,7 @@ public class WorkersWaitingQueue {
         throw new NullPointerException();
     }
 
+    /* Dodanie wątku do kolejki. */
     protected void add(Long pid) throws InterruptedException {
         queBlocker.acquire();
 
@@ -38,11 +40,14 @@ public class WorkersWaitingQueue {
         queBlocker.release();
     }
 
+    /* Przejście wątku przez kolejkę. */
     protected void pass(Long pid) throws InterruptedException {
         queBlocker.acquire();
 
         Integer patienceIndex = getIndexOfPatience(pid);
 
+        /* Jeżeli wątek jest pierwszy w kolejce lub już poza nią,
+        * możemy go przepuścić. */
         if (patienceIndex + 1 > patienceArray.size() - 1) {
             queBlocker.release();
             return;
@@ -51,6 +56,10 @@ public class WorkersWaitingQueue {
         for(int i = patienceIndex + 1; i < patienceArray.size(); i++) {
             WorkerPatience workerPatience = patienceArray.get(i);
 
+            /* Jeżeli następny wątek posiada cierpliwość równą 0,
+            * zatrzymujemy się na jego semaforze.
+            * Kiedy ten wątek wyjdzie z kolejki,
+            * obudzi nas i będziemy mogli próbować przejść przez kolejne wątki. */
             if(workerPatience.getPatience() == 0) {
                 freezeMap.getFreezedBy(workerPatience.getPid());
 
@@ -72,6 +81,7 @@ public class WorkersWaitingQueue {
         queBlocker.release();
     }
 
+    /* Usunięcie wątku z kolejki. */
     protected void remove(Long pid) throws InterruptedException {
         queBlocker.acquire();
 
@@ -87,6 +97,9 @@ public class WorkersWaitingQueue {
         queBlocker.release();
     }
 
+    /* Klasa pomocnicza, zwracająca informacje,
+    * ile wątek może przepuścić innych wątków.
+    * Liczbę wątków, jakie wątek może przepuścić, nazywam cierpliwością wątku. */
     private static class WorkerPatience {
         private final Long pid;
         private Integer patience;
@@ -96,18 +109,23 @@ public class WorkersWaitingQueue {
             this.patience = patience;
         }
 
+        /* Zmniejszenie cierpliwości wątku. */
         public void decrement() {
             patience--;
         }
+
+        /* Zwrócenie cierpliwości wątku. */
         public Integer getPatience() {
             return patience;
         }
 
+        /* Zwrócenie identyfikatora wątku. */
         public Long getPid() {
             return pid;
         }
     }
 
+    /* Klasa pomocnicza mapy do zatrzymywania wątków oczekujących w kolejce. */
     private static class FreezeMap {
         private final Map<Long, Set<Long>> freezeMap;
         private final Map<Long, Semaphore> semaphoreMap;

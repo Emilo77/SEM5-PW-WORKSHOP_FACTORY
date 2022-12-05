@@ -2,45 +2,53 @@ package cp2022.solution;
 
 import java.util.concurrent.Semaphore;
 
+/* Klasa przechowująca informacje o danym wątku. */
 public class WorkerInfo {
-
-    private final String name; //do usunięcia później
-    private final Long pid;
     private Utils.Action desiredAction;
     private WorkshopFactory.WorkplaceWrapper currentWorkplace;
     private WorkshopFactory.WorkplaceWrapper desiredWorkplace;
-    private Semaphore mutex;
+    private final Semaphore workerInfoBlocker;
 
     public WorkerInfo() {
-        this.name = Thread.currentThread().getName();
-        this.pid = Thread.currentThread().getId();
         this.desiredAction = Utils.Action.ENTER;
         this.currentWorkplace = null;
         this.desiredWorkplace = null;
-        this.mutex = new Semaphore(1, true);
+        this.workerInfoBlocker = new Semaphore(1, true);
     }
 
+    /* Zaktualizowanie informacji o wątku. */
     public void update(Utils.Action newAction,
-                       WorkshopFactory.WorkplaceWrapper workplace) {
+                       WorkshopFactory.WorkplaceWrapper workplace)
+            throws InterruptedException {
+        workerInfoBlocker.acquire();
 
         this.desiredAction = newAction;
 
         if (newAction.equals(Utils.Action.ENTER)) {
             this.currentWorkplace = null;
             this.desiredWorkplace = workplace;
+
         } else if (newAction.equals(Utils.Action.USE)) {
             this.currentWorkplace = workplace;
             this.desiredWorkplace = null;
         }
+
+        workerInfoBlocker.release();
     }
 
+    /* Zaktualizowanie informacji o wątku. */
     public void update(Utils.Action newAction,
                        WorkshopFactory.WorkplaceWrapper newCurrentWorkplace,
-                       WorkshopFactory.WorkplaceWrapper newDesiredWorkplace) {
+                       WorkshopFactory.WorkplaceWrapper newDesiredWorkplace)
+            throws InterruptedException {
+
+        workerInfoBlocker.acquire();
 
         desiredAction = newAction;
         currentWorkplace = newCurrentWorkplace;
         desiredWorkplace = newDesiredWorkplace;
+
+        workerInfoBlocker.release();
     }
 
     public WorkshopFactory.WorkplaceWrapper getCurrentWorkplace() {

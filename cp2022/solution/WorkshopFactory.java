@@ -24,6 +24,7 @@ import static cp2022.solution.Utils.getWorkplace;
 public final class WorkshopFactory {
     static String runtimeMessage = "panic: unexpected thread interruption";
 
+    /* Klasa pomocnicza, będąca wrapperem dla stanowiska. */
     static class WorkplaceWrapper extends Workplace {
         private final Workplace workplace;
         private final Semaphore enterMutex;
@@ -76,6 +77,7 @@ public final class WorkshopFactory {
                     previousWorkplace.removeWorker(Thread.currentThread().getId());
                 }
 
+                /* Dodajemy informację o sobie na stanowisku. */
                 addWorker(Thread.currentThread().getId());
                 /* Nowa informacja o wątku, że chce zacząć pracę na stanowisku */
                 workerMap.updateWorkerInfo(
@@ -83,7 +85,11 @@ public final class WorkshopFactory {
                         Action.USE,
                         this);
 
+                /* Podniesienie semafora na pracę,
+                czekamy, aż otrzymamy pozwolenie, że możemy pracować. */
                 workingMutex.acquire();
+
+                /* Rozpoczynamy pracę na stanowisku. */
                 workplace.use();
             } catch (InterruptedException e) {
                 throw new RuntimeException(runtimeMessage);
@@ -92,31 +98,32 @@ public final class WorkshopFactory {
     }
 
     public final static Workshop newWorkshop(Collection<Workplace> workplaces) {
-
+        final WorkersOccupyMap workerMap = new WorkersOccupyMap();
+        final Collection<WorkplaceWrapper> workplaceWrappers =
+                Utils.initializeWrappers(workplaces, workerMap);
+        final WorkersWaitingQueue waitingQueue =
+                new WorkersWaitingQueue(workplaces.size());
         return new Workshop() {
-            private final WorkersOccupyMap workerMap = new WorkersOccupyMap();
-            private final Collection<WorkplaceWrapper> workplaceWrappers =
-                    Utils.initializeWrappers(workplaces, workerMap);
-            private final WorkersWaitingQueue waitingQueue =
-                    new WorkersWaitingQueue(workplaces.size());
+
 
             @Override
             public Workplace enter(WorkplaceId wid) {
                 try {
 
+                    /* Dodanie wątku do kolejki wejściowej. */
                     waitingQueue.add(Thread.currentThread().getId());
 
+                    /* Dodanie wątku do mapy z informacjami. */
                     workerMap.insertNewWorker(Thread.currentThread().getId());
-                    /* Wyszukanie stanowiska o podanym identyfikatorze */
+
+                    /* Wyszukanie stanowiska o podanym identyfikatorze. */
                     WorkplaceWrapper workplace = getWorkplace(workplaceWrappers, wid);
 
-                    /* Nowa informacja o wątku, że chce wejść na stanowisko */
+                    /* Nowa informacja o wątku, że chce wejść na stanowisko. */
                     workerMap.updateWorkerInfo(
                             Thread.currentThread().getId(),
                             Action.ENTER,
                             workplace);
-
-
 
                     /* Zawieszenie się na wejściu na stanowisko. */
                     workplace.enterMutex.acquire();
@@ -125,15 +132,10 @@ public final class WorkshopFactory {
                     waitingQueue.pass(Thread.currentThread().getId());
                     waitingQueue.remove(Thread.currentThread().getId());
 
-
                     return workplace;
                 } catch (InterruptedException e) {
                     throw new RuntimeException(runtimeMessage);
                 }
-            }
-
-            private void checkCycle(WorkplaceWrapper workplace) {
-                Set<Long> workers = workplace.getWorkers();
             }
 
             @Override
@@ -144,11 +146,11 @@ public final class WorkshopFactory {
                     /* Zaznaczenie, że czeka się w kolejce do chęci użycia. */
                     waitingQueue.add(Thread.currentThread().getId());
 
-                    /* Wyszukanie aktualnego stanowiska */
+                    /* Wyszukanie aktualnego stanowiska. */
                     WorkplaceWrapper currentWorkplace =
                             workerMap.getCurrentWorkplace(Thread.currentThread().getId());
 
-                    /* Wyszukanie następnego stanowiska */
+                    /* Wyszukanie następnego stanowiska. */
                     WorkplaceWrapper futureWorkplace = getWorkplace(workplaceWrappers, wid);
 
                     /* Jeżeli worker chce zmienić stanowisko na takie samo,
@@ -159,7 +161,7 @@ public final class WorkshopFactory {
                                 Thread.currentThread().getId(),
                                 Action.USE,
                                 futureWorkplace);
-                        /* Usunięcie się z kolejki, ponieważ mamy priorytet */
+                        /* Usunięcie się z kolejki, ponieważ mamy priorytet. */
                         waitingQueue.remove(Thread.currentThread().getId());
 
                         /* Zwolnienie ochrony do użycia USE, możemy tak zrobić,
@@ -176,13 +178,19 @@ public final class WorkshopFactory {
                             futureWorkplace);
 
 
-
-                    checkCycle(futureWorkplace);
+                    /* Podniesienie semafora,
+                    inny wątek może teraz wejść na nasze aktualne stanowisko. */
                     currentWorkplace.enterMutex.release();
 
+                    /* Opuszczenie semafora, czekamy, aż dostaniemy pozwolenie
+                    * na wejście do nowego stanowiska. */
                     futureWorkplace.enterMutex.acquire();
+
+                    /* Jeżeli możemy już wejść,
+                    * usuwamy się z kolejki wątków oczekujących. */
                     waitingQueue.remove(Thread.currentThread().getId());
 
+                    /* Zezwalamy na pracę innego wątku na aktualnym stanowisku. */
                     currentWorkplace.workingMutex.release();
 
                     return futureWorkplace;
@@ -195,10 +203,17 @@ public final class WorkshopFactory {
             @Override
             public void leave() {
                 try {
+                    /* Wyszukanie aktualnego stanowiska. */
                     WorkplaceWrapper workplace = workerMap.getCurrentWorkplace(
                             Thread.currentThread().getId());
+
+                    /* Zaznaczamy, że wychodzimy ze stanowiska. */
                     workplace.workers.remove(Thread.currentThread().getId());
                     workerMap.removeWorker(Thread.currentThread().getId());
+
+                    /* Opuszczamy oba semafory na wejście i pracę
+                    * na opuszczonym przez nas stanowisku,
+                    * inny wątek może wejść i zacząć pracę. */
                     workplace.enterMutex.release();
                     workplace.workingMutex.release();
                 } catch (InterruptedException e) {
