@@ -1,7 +1,5 @@
 package cp2022.solution;
 
-import org.junit.jupiter.api.Assertions;
-
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Semaphore;
 
